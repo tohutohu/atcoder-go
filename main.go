@@ -2,12 +2,16 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
 	"github.com/PuerkitoBio/goquery"
+	client "github.com/tohutohu/atcoder-go/client/atcoder"
 	"github.com/urfave/cli"
 )
 
@@ -47,11 +51,11 @@ func main() {
 						problemName := dirName[1:]
 						go func(dirPath string) {
 							defer wg.Done()
-							samples, err := getSample(contestName, problemName)
+							samples, state, err := getSample(contestName, problemName)
 							if err != nil {
 								panic(err)
 							}
-							setUpCPPDir(dirPath, samples)
+							setUpCPPDir(dirPath, samples, state)
 							<-sem
 						}(contestName + dirName)
 					}
@@ -64,6 +68,56 @@ func main() {
 				return cli.NewExitError("invalid contest name", 1)
 			},
 		},
+		{
+			Name: "submit",
+			Action: func(ctx *cli.Context) error {
+				if len(ctx.Args()) > 2 {
+					return cli.NewExitError("invalid arguments", 1)
+				}
+				fileName := ctx.Args().First()
+				file, err := os.Open(fileName)
+				if err != nil {
+					return err
+				}
+
+				body, err := ioutil.ReadAll(file)
+				if err != nil {
+					return err
+				}
+
+				filePath, err := filepath.Abs(fileName)
+				if err != nil {
+					return err
+				}
+
+				dirPath := filepath.Dir(filePath)
+				if err != nil {
+					return err
+				}
+
+				dirs := strings.Split(dirPath, "/")
+				contest := dirs[len(dirs)-2]
+				task := dirs[len(dirs)-1]
+				contestRe := regexp.MustCompile(`a(r|b|g)c`)
+				taskRe := regexp.MustCompile(`^(a|b|c|d|e|f|g|h)$`)
+				if !contestRe.Match([]byte(contest)) || !taskRe.Match([]byte(task)) {
+					return cli.NewExitError("invalid file", 1)
+				}
+				c := client.New()
+				fmt.Println(contest, task)
+
+				return c.Submit(contest, task, string(body))
+			},
+		},
+		{
+			Name: "po",
+			Action: func(ctx *cli.Context) error {
+				c := client.New()
+				c.Auth(os.Getenv("ATC_NAME"), os.Getenv("ATC_PASS"))
+				c.Login()
+				return nil
+			},
+		},
 	}
 
 	err := app.Run(os.Args)
@@ -72,7 +126,7 @@ func main() {
 	}
 }
 
-func setUpCPPDir(path string, samples []Sample) error {
+func setUpCPPDir(path string, samples []Sample, state string) error {
 	if err := mkdir(path); err != nil {
 		return err
 	}
@@ -97,6 +151,14 @@ func setUpCPPDir(path string, samples []Sample) error {
 	testBody = strings.Replace(testBody, "\"sampleInput-placeholder\"", testInputs, 1)
 	testBody = strings.Replace(testBody, "\"sampleOutput-placeholder\"", testOutputs, 1)
 	testFile.Write([]byte(testBody))
+
+	stateFile, err := os.Create(path + "/state.txt")
+	defer stateFile.Close()
+	if err != nil {
+		return err
+	}
+	rep := regexp.MustCompile(`\n{2,}`)
+	stateFile.Write([]byte(rep.ReplaceAllString(state, "\n\n")))
 	return nil
 }
 
@@ -115,12 +177,12 @@ func mkdir(path string) error {
 	return nil
 }
 
-func getSample(contest, problem string) ([]Sample, error) {
+func getSample(contest, problem string) ([]Sample, string, error) {
 	samples := []Sample{}
 	url := fmt.Sprintf("https://beta.atcoder.jp/contests/%s/tasks/%s_%s", contest, contest, problem)
 	doc, err := goquery.NewDocument(url)
 	if err != nil {
-		return samples, err
+		return samples, "", err
 	}
 	sample := Sample{}
 	doc.Find("div.part>section>pre").Each(func(_ int, s *goquery.Selection) {
@@ -135,5 +197,5 @@ func getSample(contest, problem string) ([]Sample, error) {
 			sample = Sample{}
 		}
 	})
-	return samples, err
+	return samples, doc.Find("#task-statement>span>span.lang-ja").Text(), err
 }
