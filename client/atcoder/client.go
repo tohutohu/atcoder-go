@@ -101,8 +101,6 @@ func (c *AtcoderClient) Submit(contest, task, code string) error {
 		return err
 	}
 	defer resp.Body.Close()
-	po, _ := ioutil.ReadAll(resp.Body)
-	fmt.Println(string(po))
 	return nil
 }
 
