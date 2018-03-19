@@ -9,22 +9,27 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
-	"github.com/PuerkitoBio/goquery"
 	client "github.com/tohutohu/atcoder-go/client/atcoder"
 	"github.com/urfave/cli"
 )
 
 //go:generate go-assets-builder -s="/data" -o bindata.go data
 
-type Sample struct {
-	Input  string
-	Output string
-}
+var (
+	contestRe = regexp.MustCompile(`^a(r|b|g)c[0-9]{3}$`)
+	taskRe    = regexp.MustCompile(`^(a|b|c|d|e|f|g|h)$`)
+	tasks     = map[string][]string{
+		"abc": []string{"a", "b", "c", "d"},
+		"arc": []string{"a", "b", "c", "d"},
+		"agc": []string{"a", "b", "c", "d", "e", "f"},
+	}
+)
 
 func main() {
 	app := cli.NewApp()
-	app.Name = "atc"
+	app.Name = "atcoder go"
 	app.Usage = "useful atcoder support commands"
 	app.Version = "0.0.1"
 
@@ -38,31 +43,28 @@ func main() {
 					return cli.NewExitError("invalid argument", 1)
 				}
 				contestName := c.Args().First()
-				if strings.Contains(contestName, "abc") {
+				if contestRe.MatchString(contestName) {
 					err := mkdir(contestName)
 					if err != nil {
 						return err
 					}
+					contestType := contestName[:3]
+					fmt.Println(contestType)
 					var wg sync.WaitGroup
+					c := client.New()
 					sem := make(chan struct{}, 10)
-					for _, dirName := range []string{"/a", "/b", "/c", "/d"} {
+					for _, dirName := range tasks[contestType] {
 						wg.Add(1)
 						sem <- struct{}{}
-						problemName := dirName[1:]
+						problemName := dirName
 						go func(dirPath string) {
 							defer wg.Done()
-							samples, state, err := getSample(contestName, problemName)
-							if err != nil {
-								panic(err)
-							}
+							samples, state, _ := c.GetTaskInfo(contestName, problemName)
 							setUpCPPDir(dirPath, samples, state)
 							<-sem
-						}(contestName + dirName)
+						}(contestName + "/" + dirName)
 					}
 					wg.Wait()
-					return nil
-				} else if strings.Contains(contestName, "arc") {
-
 					return nil
 				}
 				return cli.NewExitError("invalid contest name", 1)
@@ -75,46 +77,48 @@ func main() {
 					return cli.NewExitError("invalid arguments", 1)
 				}
 				fileName := ctx.Args().First()
+				contest, task, err := getContestAndTask(fileName)
+				if err != nil {
+					return err
+				}
+				if !contestRe.MatchString(contest) || !taskRe.MatchString(task) {
+					return cli.NewExitError("invalid file", 1)
+				}
+				c := client.New()
+				fmt.Printf("Start submit code, contest:%s task:%s", contest, task)
+				ch := make(chan struct{})
+
+				go func() {
+					t := time.NewTicker(300 * time.Millisecond)
+					for {
+						select {
+						case <-t.C:
+							fmt.Print(".")
+						case <-ch:
+							fmt.Println("Done")
+							t.Stop()
+							ch <- struct{}{}
+							return
+						}
+					}
+				}()
+
 				file, err := os.Open(fileName)
 				if err != nil {
 					return err
 				}
-
 				body, err := ioutil.ReadAll(file)
 				if err != nil {
 					return err
 				}
 
-				filePath, err := filepath.Abs(fileName)
-				if err != nil {
+				if err := c.Submit(contest, task, string(body)); err != nil {
+					fmt.Println("Submit failed")
 					return err
 				}
-
-				dirPath := filepath.Dir(filePath)
-				if err != nil {
-					return err
-				}
-
-				dirs := strings.Split(dirPath, "/")
-				contest := dirs[len(dirs)-2]
-				task := dirs[len(dirs)-1]
-				contestRe := regexp.MustCompile(`a(r|b|g)c`)
-				taskRe := regexp.MustCompile(`^(a|b|c|d|e|f|g|h)$`)
-				if !contestRe.Match([]byte(contest)) || !taskRe.Match([]byte(task)) {
-					return cli.NewExitError("invalid file", 1)
-				}
-				c := client.New()
-				fmt.Println(contest, task)
-
-				return c.Submit(contest, task, string(body))
-			},
-		},
-		{
-			Name: "po",
-			Action: func(ctx *cli.Context) error {
-				c := client.New()
-				c.Auth(os.Getenv("ATC_NAME"), os.Getenv("ATC_PASS"))
-				c.Login()
+				ch <- struct{}{}
+				<-ch
+				fmt.Println("Submit complete")
 				return nil
 			},
 		},
@@ -126,7 +130,7 @@ func main() {
 	}
 }
 
-func setUpCPPDir(path string, samples []Sample, state string) error {
+func setUpCPPDir(path string, samples []client.Sample, state string) error {
 	if err := mkdir(path); err != nil {
 		return err
 	}
@@ -177,25 +181,16 @@ func mkdir(path string) error {
 	return nil
 }
 
-func getSample(contest, problem string) ([]Sample, string, error) {
-	samples := []Sample{}
-	url := fmt.Sprintf("https://beta.atcoder.jp/contests/%s/tasks/%s_%s", contest, contest, problem)
-	doc, err := goquery.NewDocument(url)
+func getContestAndTask(fileName string) (contest, task string, err error) {
+	filePath, err := filepath.Abs(fileName)
 	if err != nil {
-		return samples, "", err
+		return
 	}
-	sample := Sample{}
-	doc.Find("div.part>section>pre").Each(func(_ int, s *goquery.Selection) {
-		if s.Parent().Parent().Parent().HasClass("io-style") {
-			return
-		}
-		if sample.Input == "" {
-			sample.Input = s.Text()
-		} else {
-			sample.Output = s.Text()
-			samples = append(samples, sample)
-			sample = Sample{}
-		}
-	})
-	return samples, doc.Find("#task-statement>span>span.lang-ja").Text(), err
+
+	dirPath := filepath.Dir(filePath)
+
+	dirs := strings.Split(dirPath, "/")
+	contest = dirs[len(dirs)-2]
+	task = dirs[len(dirs)-1]
+	return
 }

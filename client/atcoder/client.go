@@ -11,11 +11,19 @@ import (
 	"os"
 	"regexp"
 	"strings"
+
+	"github.com/PuerkitoBio/goquery"
+	"github.com/urfave/cli"
 )
 
 var (
 	csrfTokenRe = regexp.MustCompile(`name="csrf_token"\svalue=('|")(.*?)('|")`)
 )
+
+type Sample struct {
+	Input  string
+	Output string
+}
 
 type AtcoderClient struct {
 	name    string
@@ -42,10 +50,10 @@ func New() *AtcoderClient {
 
 func (c *AtcoderClient) Login() error {
 	resp, err := c.client.Get("https://beta.atcoder.jp/login")
-	defer resp.Body.Close()
 	if err != nil {
 		return err
 	}
+	defer resp.Body.Close()
 
 	csrfToken, err := getCsrfToken(resp.Body)
 	if err != nil {
@@ -64,6 +72,9 @@ func (c *AtcoderClient) Login() error {
 	resp, err = c.client.Do(req)
 	if err != nil {
 		return err
+	}
+	if resp.StatusCode != 302 {
+		return cli.NewExitError("ログインに失敗しました", 1)
 	}
 	defer resp.Body.Close()
 	c.logined = true
@@ -114,4 +125,27 @@ func getCsrfToken(body io.ReadCloser) (string, error) {
 		return "", errors.New("get csrf token failed")
 	}
 	return strings.Replace(match[2], "&#43;", "+", -1), nil
+}
+
+func (c *AtcoderClient) GetTaskInfo(contest, problem string) ([]Sample, string, error) {
+	samples := []Sample{}
+	url := fmt.Sprintf("https://beta.atcoder.jp/contests/%s/tasks/%s_%s", contest, contest, problem)
+	doc, err := goquery.NewDocument(url)
+	if err != nil {
+		return samples, "", nil
+	}
+	sample := Sample{}
+	doc.Find("div.part>section>pre").Each(func(_ int, s *goquery.Selection) {
+		if s.Parent().Parent().Parent().HasClass("io-style") {
+			return
+		}
+		if sample.Input == "" {
+			sample.Input = s.Text()
+		} else {
+			sample.Output = s.Text()
+			samples = append(samples, sample)
+			sample = Sample{}
+		}
+	})
+	return samples, doc.Find("#task-statement>span>span.lang-ja").Text(), err
 }
