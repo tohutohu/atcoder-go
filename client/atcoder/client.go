@@ -13,7 +13,6 @@ import (
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/urfave/cli"
 )
 
 var (
@@ -38,14 +37,14 @@ func (c *AtcoderClient) Auth(name, pass string) {
 	c.pass = pass
 }
 
-func New() *AtcoderClient {
+func New() (*AtcoderClient, error) {
 	c := &AtcoderClient{}
 	jar, _ := cookiejar.New(nil)
 	c.jar = jar
 	c.client = &http.Client{Jar: c.jar}
 	c.Auth(os.Getenv("ATC_NAME"), os.Getenv("ATC_PASS"))
-	c.Login()
-	return c
+	err := c.Login()
+	return c, err
 }
 
 func (c *AtcoderClient) Login() error {
@@ -64,17 +63,9 @@ func (c *AtcoderClient) Login() error {
 	values.Set("csrf_token", csrfToken)
 	values.Add("username", c.name)
 	values.Add("password", c.pass)
-	req, err := http.NewRequest("POST", "https://beta.atcoder.jp/login?", strings.NewReader(values.Encode()))
+	resp, err = c.client.PostForm("https://beta.atcoder.jp/login", values)
 	if err != nil {
 		return err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err = c.client.Do(req)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode != 302 {
-		return cli.NewExitError("ログインに失敗しました", 1)
 	}
 	defer resp.Body.Close()
 	c.logined = true
@@ -82,12 +73,7 @@ func (c *AtcoderClient) Login() error {
 }
 
 func (c *AtcoderClient) Submit(contest, task, code string) error {
-	req, err := http.NewRequest("GET", fmt.Sprintf("https://beta.atcoder.jp/%s/tasks/%s_%s", contest, contest, task), nil)
-	if err != nil {
-		return err
-	}
-
-	resp, err := c.client.Do(req)
+	resp, err := c.client.Get(fmt.Sprintf("https://beta.atcoder.jp/%s/tasks/%s_%s", contest, contest, task))
 	if err != nil {
 		return err
 	}
@@ -102,12 +88,7 @@ func (c *AtcoderClient) Submit(contest, task, code string) error {
 	values.Add("data.LanguageId", "3013")
 	values.Add("sourceCode", code)
 	values.Add("data.TaskScreenName", fmt.Sprintf("%s_%s", contest, task))
-	req, err = http.NewRequest("POST", fmt.Sprintf("https://beta.atcoder.jp/contests/%s/submit", contest), strings.NewReader(values.Encode()))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err = c.client.Do(req)
+	resp, err = c.client.PostForm(fmt.Sprintf("https://beta.atcoder.jp/contests/%s/submit", contest), values)
 	if err != nil {
 		return err
 	}

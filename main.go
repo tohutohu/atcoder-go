@@ -51,7 +51,10 @@ func main() {
 					contestType := contestName[:3]
 					fmt.Println(contestType)
 					var wg sync.WaitGroup
-					c := client.New()
+					c, err := client.New()
+					if err != nil {
+						return err
+					}
 					sem := make(chan struct{}, 10)
 					for _, dirName := range tasks[contestType] {
 						wg.Add(1)
@@ -84,7 +87,10 @@ func main() {
 				if !contestRe.MatchString(contest) || !taskRe.MatchString(task) {
 					return cli.NewExitError("invalid file", 1)
 				}
-				c := client.New()
+				c, err := client.New()
+				if err != nil {
+					return err
+				}
 				fmt.Printf("Start submit code, contest:%s task:%s", contest, task)
 				ch := make(chan struct{})
 
@@ -119,6 +125,16 @@ func main() {
 				ch <- struct{}{}
 				<-ch
 				fmt.Println("Submit complete")
+				return nil
+			},
+		},
+		{
+			Name: "login",
+			Action: func(ctx *cli.Context) error {
+				_, err := client.New()
+				if err != nil {
+					return err
+				}
 				return nil
 			},
 		},
